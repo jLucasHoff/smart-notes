@@ -6,6 +6,7 @@ import {
     PROCESS_ENV
 } from "$env/static/private";
 import { signToken } from "$lib/server/jwt";
+import { initialFiles } from "$lib/models/repo.js";
 
 const GITHUB_API_BASE = "https://api.github.com";
 
@@ -77,6 +78,22 @@ export const GET = async ({url, cookies}) => {
                 },
                 body: JSON.stringify({ permission: 'push' })
             });
+
+            //mockup
+            for (const file of initialFiles(username)) {
+                await fetch(`${repoUrl}/contents/${file.path}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Authorization': `Bearer ${SMART_NOTES_PAT}`,
+                        'Accept': 'application/vnd.github.v3+json',
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message: `Adds ${file.path}`,
+                        content: Buffer.from(file.content).toString('base64')
+                    })
+                });
+            }
         }
 
         const token = signToken({ username })
