@@ -7,89 +7,89 @@ import {
 } from "$env/static/private";
 import { signToken } from "$lib/server/jwt";
 
+const GITHUB_API_BASE = "https://api.github.com";
+
 export const GET = async ({url, cookies}) => {
-    const githubCallbackCode = url.searchParams.get("code");
-    if(!githubCallbackCode) throw redirect(302, "/");
+    const code = url.searchParams.get("code");
+    if(!code) throw redirect(302, "/");
 
     try {
-        const responseURLParams = new URLSearchParams();
-        responseURLParams.append('client_id', GITHUB_OAUTH_ID);
-		responseURLParams.append('client_secret', GITHUB_OAUTH_SECRET);
-		responseURLParams.append('code', githubCallbackCode);
-
-        const githubTokenResponse = await fetch("https://github.com/login/oauth/access_token", {
+        const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
             method: "POST",
             headers: {
                 "Content-Type": "application/x-www-form-urlencoded",
                 Accept: "application/json"
             },
-            body: responseURLParams
+            body: new URLSearchParams({
+                client_id: GITHUB_OAUTH_ID,
+                client_secret: GITHUB_OAUTH_SECRET,
+                code
+            })
         });
 
-        const githubTokenData = await githubTokenResponse.json();
-        const githubAcessToken = githubTokenData.access_token;
-        const githubUserResponse = await fetch("https://api.github.com/user", {
+        const { access_token } = await tokenRes.json();
+        if (!access_token) throw new Error("Token not received");
+
+        const userRes = await fetch(`${GITHUB_API_BASE}/user`, {
             headers: {
-                Authorization: `Bearer ${githubAcessToken}`,
+                Authorization: `Bearer ${access_token}`,
                 Accept: "application/vnd.github.v3+json"
             }
         });
 
-        const githubUserData = await githubUserResponse.json();
-        const userUsername = githubUserData.login
-        const repoName = `${userUsername}-smart-notes`
+        const { login: username } = await userRes.json();
+        if (!username) throw new Error("Username not found")
 
-        const repoExistance = await fetch(`https://api.github.com/repos/smart-notes-users/${repoName}`, {
+        const repoName = `${username}-smart-notes`
+        const repoUrl = `${GITHUB_API_BASE}/repos/smart-notes-users/${repoName}`;
+
+        const repoCheck = await fetch(repoUrl, {
             headers: {
                 Authorization: `Bearer ${SMART_NOTES_PAT}`,
                 Accept: "application/vnd.github.v3+json"
             }
         });
 
-        switch (repoExistance.status) {
-            case 404:
-                const repoCreationResponse = await fetch("https://api.github.com/orgs/smart-notes-users/repos", {
-                    method: 'POST',
-                    headers: {
-                        Authorization: `Bearer ${SMART_NOTES_PAT}`,
-                        Accept: 'application/vnd.github.v3+json',
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        name: repoName,
-                        private: true, 
-                        description: `Repositório de Smartnotes para o usuário ${userUsername}.`
-                    })
-                });
+        if (repoCheck.status === 404) {
+            const createRes = await fetch(`${GITHUB_API_BASE}/orgs/smart-notes-users/repos`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${SMART_NOTES_PAT}`,
+                    Accept: 'application/vnd.github.v3+json',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    name: repoName,
+                    private: true, 
+                    description: `Smartnotes repo id #${crypto.randomUUID()}.`
+                })
+            });
 
-                if (repoCreationResponse.ok) {		
-                    await fetch(`https://api.github.com/repos/smart-notes-users/${repoName}/collaborators/${userUsername}`, {
-                        method: 'PUT',
-                        headers: {
-                            Authorization: `Bearer ${SMART_NOTES_PAT}`,
-                            Accept: 'application/vnd.github.v3+json',
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({ permission: 'push' })
-                    });
-                }
-                break;
-        
-            default:
-                throw redirect(302, `/`);
+            if (!createRes.ok) throw new Error("Something wrong happens while creates the repo")	;
+
+            // invite
+            await fetch(`${repoUrl}/collaborators/${username}`, {
+                method: 'PUT',
+                headers: {
+                    Authorization: `Bearer ${SMART_NOTES_PAT}`,
+                    Accept: 'application/vnd.github.v3+json',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ permission: 'push' })
+            });
         }
 
-        const JWT_TOKEN = signToken({ username: userUsername })
-        cookies.set("auth_token", JWT_TOKEN, {
+        const token = signToken({ username })
+        cookies.set("auth_token", token, {
             path: "/",
             httpOnly: true,
             secure: process.env.NODE_ENV === PROCESS_ENV,
             sameSite: "lax",
             maxAge: 60 * 60 * 24 * 14
         });
+
+        throw redirect(302, "/galleries");
     } catch (error) {
 		throw redirect(302, '/');
     }
-
-    throw redirect(302, "/galleries");
 }
